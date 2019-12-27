@@ -4,6 +4,8 @@
 #include <ESP8266WebServer.h>
 #include <AutoConnect.h>
 #include <PubSubClient.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
 
 #define LED_PIN D6
 
@@ -29,10 +31,108 @@ AutoConnect Portal(Server);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
+long _millis;
+
 void rootPage()
 {
   char content[] = "Hello, world";
   Server.send(200, "text/plain", content);
+}
+
+bool MakeRestCall(char *url, DynamicJsonDocument *jsonBuffer)
+{
+  Serial.print("Making rest call to ");
+  Serial.print(url);
+
+  HTTPClient http; //Object of class HTTPClient
+  //http.setTimeout(1000);
+  http.begin(url);
+  int httpCode = http.GET();
+  Serial.println("Return Code ");
+  Serial.println(httpCode);
+
+  if (httpCode > 0)
+  {
+    Serial.println("Succeeded.");
+    const size_t bufferSize = JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(5) + JSON_OBJECT_SIZE(8) + 370;
+    Serial.print(http.getString());
+    jsonBuffer = new DynamicJsonDocument(bufferSize);
+    DeserializationError error = deserializeJson(*jsonBuffer, http.getString());
+    if (error)
+    {
+      Serial.println("Unable to deserialize Json");
+      return false;
+    }
+    //  JsonObject root = jsonBuffer.parseObject(http.getString());
+
+    /*int id = root["id"]; 
+      const char* name = root["name"]; 
+      const char* username = root["username"]; 
+      const char* email = root["email"]; 
+
+      Serial.print("Name:");
+      Serial.println(name);
+      Serial.print("Username:");
+      Serial.println(username);
+      Serial.print("Email:");
+      Serial.println(email);*/
+  }
+  else
+  {
+    Serial.println("No response.");
+  }
+
+  http.end(); //Close connection
+
+  return true;
+}
+
+bool ConnectOctoPrint(char *oServer)
+{
+  char url[100];
+  strcpy(url, "http://");
+  strcat(url, oServer);
+  strcat(url, "/api/version");
+
+  Serial.print("Making rest call to ");
+  Serial.print(url);
+
+  HTTPClient http; //Object of class HTTPClient
+  http.setTimeout(1000);
+  http.begin(url);
+  int httpCode = http.GET();
+  Serial.println("Return Code ");
+  Serial.println(httpCode);
+
+  if (httpCode > 0)
+  {
+    Serial.println("Succeeded.");
+    const size_t bufferSize = JSON_OBJECT_SIZE(3) + 60;
+
+    DynamicJsonDocument jsonBuffer(bufferSize);
+    DeserializationError error = deserializeJson(jsonBuffer, http.getString());
+    if (error)
+    {
+      Serial.println("Unable to deserialize Json");
+      Serial.println(error.c_str());
+      return false;
+    }
+
+    Serial.print("API Version: ");
+    Serial.println(jsonBuffer["api"].as<char *>());
+    Serial.print("Server Version: ");
+    Serial.println(jsonBuffer["server"].as<char *>());
+    Serial.print("Description: ");
+    Serial.println(jsonBuffer["text"].as<char *>());
+  }
+  else
+  {
+    Serial.println("No response.");
+  }
+
+  http.end(); //Close connection
+
+  return true;
 }
 
 void MQTTCconnect()
@@ -55,8 +155,8 @@ void MQTTCconnect()
       Serial.println("Could not send message :(");
     }
     // ... and resubscribe
-  // Ensure that we are subscribed to the topic "MakerIOTopic"
-  mqttClient.subscribe("3D-Enclosure");
+    // Ensure that we are subscribed to the topic "MakerIOTopic"
+    mqttClient.subscribe("3D-Enclosure");
   }
   else
   {
@@ -67,7 +167,6 @@ void MQTTCconnect()
 
 void setup()
 {
-
   pinMode(BUILTIN_LED1, OUTPUT); // Initialize the BUILTIN_LED1 pin as an output
   pinMode(BUILTIN_LED2, OUTPUT); // Initialize the BUILTIN_LED2 pin as an output
 
@@ -99,10 +198,14 @@ void setup()
 
   digitalWrite(BUILTIN_LED1, LOW); // Turn the LED off by making the voltage HIGH
   digitalWrite(BUILTIN_LED2, LOW); // Turn the LED ON by making the voltage LOW
-delay(1000);
+  delay(1000);
   mqttClient.setServer(MQTTSserver, 1883);
   mqttClient.setCallback(subscribeReceive);
   MQTTCconnect();
+
+  ConnectOctoPrint("10.20.0.119:5000");
+
+  _millis = millis();
 }
 
 void loop()
@@ -111,7 +214,12 @@ void loop()
 
   mqttClient.loop();
 
+  if (_millis > millis() + 2000)
+  {
+    _millis = millis();
 
+    // MakeRestCall("http://jsonplaceholder.typijjhcode.com/users/1");
+  }
 }
 
 void subscribeReceive(char *topic, byte *payload, unsigned int length)
