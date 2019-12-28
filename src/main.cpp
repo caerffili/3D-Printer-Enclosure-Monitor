@@ -6,11 +6,27 @@
 #include <PubSubClient.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #define LED_PIN D6
 
 #define LED_SKIP 2
 #define NUM_LEDS 4
+
+// Data wire is plugged into port D2 on the ESP8266
+#define ONE_WIRE_BUS D2
+
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass our oneWire reference to Dallas Temperature.
+DallasTemperature sensors(&oneWire);
+
+// variable to hold device addresses
+DeviceAddress Thermometer;
+
+int deviceCount = 0;
 
 const short int BUILTIN_LED1 = 2;  //GPIO2
 const short int BUILTIN_LED2 = 16; //GPIO16
@@ -39,7 +55,7 @@ void rootPage()
   Server.send(200, "text/plain", content);
 }
 
-bool MakeRestCall(char *url, DynamicJsonDocument *jsonBuffer)
+/*bool MakeRestCall(char *url, DynamicJsonDocument *jsonBuffer)
 {
   Serial.print("Making rest call to ");
   Serial.print(url);
@@ -75,7 +91,7 @@ bool MakeRestCall(char *url, DynamicJsonDocument *jsonBuffer)
       Serial.print("Username:");
       Serial.println(username);
       Serial.print("Email:");
-      Serial.println(email);*/
+      Serial.println(email);*
   }
   else
   {
@@ -85,17 +101,18 @@ bool MakeRestCall(char *url, DynamicJsonDocument *jsonBuffer)
   http.end(); //Close connection
 
   return true;
-}
+}*/
 
-bool ConnectOctoPrint(char *oServer)
+bool OctoPrintGetVersion(char *oServer, char *api, char *server, char *description)
 {
+  bool retval = false;
   char url[100];
   strcpy(url, "http://");
   strcat(url, oServer);
   strcat(url, "/api/version");
 
   Serial.print("Making rest call to ");
-  Serial.print(url);
+  Serial.println(url);
 
   HTTPClient http; //Object of class HTTPClient
   http.setTimeout(1000);
@@ -115,15 +132,18 @@ bool ConnectOctoPrint(char *oServer)
     {
       Serial.println("Unable to deserialize Json");
       Serial.println(error.c_str());
-      return false;
     }
 
-    Serial.print("API Version: ");
+    strcpy(api, jsonBuffer["api"].as<char *>());
+    strcpy(server, jsonBuffer["server"].as<char *>());
+    strcpy(description, jsonBuffer["text"].as<char *>());
+    retval = true;
+    /*  Serial.print("API Version: ");
     Serial.println(jsonBuffer["api"].as<char *>());
     Serial.print("Server Version: ");
     Serial.println(jsonBuffer["server"].as<char *>());
     Serial.print("Description: ");
-    Serial.println(jsonBuffer["text"].as<char *>());
+    Serial.println(jsonBuffer["text"].as<char *>());*/
   }
   else
   {
@@ -132,7 +152,7 @@ bool ConnectOctoPrint(char *oServer)
 
   http.end(); //Close connection
 
-  return true;
+  return retval;
 }
 
 void MQTTCconnect()
@@ -165,6 +185,18 @@ void MQTTCconnect()
   }
 }
 
+void printAddress(DeviceAddress deviceAddress)
+{ 
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    Serial.print("0x");
+    if (deviceAddress[i] < 0x10) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+    if (i < 7) Serial.print(", ");
+  }
+  Serial.println("");
+}
+
 void setup()
 {
   pinMode(BUILTIN_LED1, OUTPUT); // Initialize the BUILTIN_LED1 pin as an output
@@ -178,7 +210,8 @@ void setup()
   showStrip();
 
   delay(1000);
-  Serial.begin(115200);
+  Serial.begin(9600);
+ // Serial.begin(115200);
   Serial.println("Starting...");
   Serial.println();
 
@@ -189,6 +222,29 @@ void setup()
 
   digitalWrite(BUILTIN_LED1, HIGH); // Turn the LED off by making the voltage HIGH
   digitalWrite(BUILTIN_LED2, LOW);  // Turn the LED ON by making the voltage LOW
+
+
+ // Start up the library
+  sensors.begin();
+
+  // locate devices on the bus
+  Serial.println("Locating devices...");
+  Serial.print("Found ");
+  deviceCount = sensors.getDeviceCount();
+  Serial.print(deviceCount, DEC);
+  Serial.println(" devices.");
+  Serial.println("");
+  
+  Serial.println("Printing addresses...");
+  for (int i = 0;  i < deviceCount;  i++)
+  {
+    Serial.print("Sensor ");
+    Serial.print(i+1);
+    Serial.print(" : ");
+    sensors.getAddress(Thermometer, i);
+    printAddress(Thermometer);
+  }
+
 
   Server.on("/", rootPage);
   if (Portal.begin())
@@ -203,7 +259,25 @@ void setup()
   mqttClient.setCallback(subscribeReceive);
   MQTTCconnect();
 
-  ConnectOctoPrint("10.20.0.119:5000");
+  char api[20];
+  char server[20];
+  char description[20];
+
+  if (OctoPrintGetVersion("10.20.0.119:5000", api, server, description))
+  // ConnectOctoPrint();
+{
+    Serial.print("API Version: ");
+    Serial.println(api);
+    Serial.print("Server Version: ");
+    Serial.println(server);
+    Serial.print("Description: ");
+    Serial.println(description);
+}
+else
+{
+    Serial.println("OctoPrint not connected!!");
+}
+
 
   _millis = millis();
 }
