@@ -16,17 +16,9 @@
 
 // Data wire is plugged into port D2 on the ESP8266
 #define ONE_WIRE_BUS D2
-
-// Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(ONE_WIRE_BUS);
-
-// Pass our oneWire reference to Dallas Temperature.
-DallasTemperature sensors(&oneWire);
-
-// variable to hold device addresses
-DeviceAddress Thermometer;
-
-int deviceCount = 0;
+DallasTemperature dallasSensors(&oneWire);
+int dallasDeviceCount = 0;
 
 const short int BUILTIN_LED1 = 2;  //GPIO2
 const short int BUILTIN_LED2 = 16; //GPIO16
@@ -118,12 +110,12 @@ bool OctoPrintGetVersion(char *oServer, char *api, char *server, char *descripti
   http.setTimeout(1000);
   http.begin(url);
   int httpCode = http.GET();
-  Serial.println("Return Code ");
-  Serial.println(httpCode);
+  Serial.print("Return Code: ");
+  Serial.print(httpCode);
 
   if (httpCode > 0)
   {
-    Serial.println("Succeeded.");
+    Serial.println(" Succeeded.");
     const size_t bufferSize = JSON_OBJECT_SIZE(3) + 60;
 
     DynamicJsonDocument jsonBuffer(bufferSize);
@@ -138,16 +130,57 @@ bool OctoPrintGetVersion(char *oServer, char *api, char *server, char *descripti
     strcpy(server, jsonBuffer["server"].as<char *>());
     strcpy(description, jsonBuffer["text"].as<char *>());
     retval = true;
-    /*  Serial.print("API Version: ");
-    Serial.println(jsonBuffer["api"].as<char *>());
-    Serial.print("Server Version: ");
-    Serial.println(jsonBuffer["server"].as<char *>());
-    Serial.print("Description: ");
-    Serial.println(jsonBuffer["text"].as<char *>());*/
   }
   else
   {
-    Serial.println("No response.");
+    Serial.println(" No response.");
+  }
+
+  http.end(); //Close connection
+
+  return retval;
+}
+
+bool OctoPrintEnclosureGetTemperature(char *oServer, int id, float *temperature)
+{
+  bool retval = false;
+  char url[100];
+  char sid[10];
+  itoa(id, sid, 10);
+  strcpy(url, "http://");
+  strcat(url, oServer);
+  strcat(url, "/plugin/enclosure/inputs/");
+  strcat(url, sid);
+
+  Serial.print("Making rest call to ");
+  Serial.println(url);
+
+  HTTPClient http; //Object of class HTTPClient
+  http.setTimeout(1000);
+  http.begin(url);
+  int httpCode = http.GET();
+  Serial.print("Return Code: ");
+  Serial.print(httpCode);
+
+  if (httpCode > 0)
+  {
+    Serial.println(" Succeeded.");
+    const size_t bufferSize = JSON_OBJECT_SIZE(19) + 396;
+
+    DynamicJsonDocument jsonBuffer(bufferSize);
+    DeserializationError error = deserializeJson(jsonBuffer, http.getString());
+    if (error)
+    {
+      Serial.println("Unable to deserialize Json");
+      Serial.println(error.c_str());
+    }
+
+    *temperature = jsonBuffer["temp_sensor_temp"];
+    retval = true;
+  }
+  else
+  {
+    Serial.println(" No response.");
   }
 
   http.end(); //Close connection
@@ -186,15 +219,42 @@ void MQTTCconnect()
 }
 
 void printAddress(DeviceAddress deviceAddress)
-{ 
+{
   for (uint8_t i = 0; i < 8; i++)
   {
     Serial.print("0x");
-    if (deviceAddress[i] < 0x10) Serial.print("0");
+    if (deviceAddress[i] < 0x10)
+      Serial.print("0");
     Serial.print(deviceAddress[i], HEX);
-    if (i < 7) Serial.print(", ");
+    if (i < 7)
+      Serial.print(", ");
   }
   Serial.println("");
+}
+
+void pollTemperatures()
+{
+  Serial.println("Polling Dallas Temperature Sensors.");
+  dallasSensors.requestTemperatures();
+  for (int i = 0; i < dallasDeviceCount; i++)
+  {
+    float temperatureC = dallasSensors.getTempCByIndex(i);
+    Serial.print(temperatureC);
+    Serial.println("ºC");
+  }
+
+  Serial.println("Polling OctoPrint Enclosure Temperature Sensors.");
+  float temperature;
+  for (int i = 1; i <= 3; i++)
+  {
+    if (OctoPrintEnclosureGetTemperature("10.20.0.147", i, &temperature))
+    {
+      Serial.print("Temperature Sensor ");
+      Serial.print(i);
+      Serial.print(": ");
+      Serial.println(temperature);
+    }
+  }
 }
 
 void setup()
@@ -211,7 +271,7 @@ void setup()
 
   delay(1000);
   Serial.begin(9600);
- // Serial.begin(115200);
+  // Serial.begin(115200);
   Serial.println("Starting...");
   Serial.println();
 
@@ -223,28 +283,27 @@ void setup()
   digitalWrite(BUILTIN_LED1, HIGH); // Turn the LED off by making the voltage HIGH
   digitalWrite(BUILTIN_LED2, LOW);  // Turn the LED ON by making the voltage LOW
 
-
- // Start up the library
-  sensors.begin();
+  // Start up the library
+  DeviceAddress Thermometer;
+  dallasSensors.begin();
 
   // locate devices on the bus
   Serial.println("Locating devices...");
   Serial.print("Found ");
-  deviceCount = sensors.getDeviceCount();
-  Serial.print(deviceCount, DEC);
+  dallasDeviceCount = dallasSensors.getDeviceCount();
+  Serial.print(dallasDeviceCount, DEC);
   Serial.println(" devices.");
   Serial.println("");
-  
+
   Serial.println("Printing addresses...");
-  for (int i = 0;  i < deviceCount;  i++)
+  for (int i = 0; i < dallasDeviceCount; i++)
   {
     Serial.print("Sensor ");
-    Serial.print(i+1);
+    Serial.print(i + 1);
     Serial.print(" : ");
-    sensors.getAddress(Thermometer, i);
+    dallasSensors.getAddress(Thermometer, i);
     printAddress(Thermometer);
   }
-
 
   Server.on("/", rootPage);
   if (Portal.begin())
@@ -263,20 +322,21 @@ void setup()
   char server[20];
   char description[20];
 
-  if (OctoPrintGetVersion("10.20.0.119:5000", api, server, description))
+  if (OctoPrintGetVersion("10.20.0.147", api, server, description))
   // ConnectOctoPrint();
-{
+  {
     Serial.print("API Version: ");
     Serial.println(api);
     Serial.print("Server Version: ");
     Serial.println(server);
     Serial.print("Description: ");
     Serial.println(description);
-}
-else
-{
+  }
+  else
+  {
     Serial.println("OctoPrint not connected!!");
-}
+  }
+
 
 
   _millis = millis();
@@ -288,12 +348,15 @@ void loop()
 
   mqttClient.loop();
 
-  if (_millis > millis() + 2000)
+  if ( millis() > _millis+ 2000)
   {
     _millis = millis();
 
     // MakeRestCall("http://jsonplaceholder.typijjhcode.com/users/1");
+      pollTemperatures();
   }
+
+
 }
 
 void subscribeReceive(char *topic, byte *payload, unsigned int length)
